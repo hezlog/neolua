@@ -957,11 +957,35 @@ namespace LuaDLR.Test
 		[TestMethod]
 		public void TestLogic18() { TestCode("return not nil", true); }
 
-    #endregion
+		[TestMethod]
+		public void TestLogic19() { TestExpr("true and 10 or 20", 10); }
 
-    #region -- Compare ----------------------------------------------------------------
+		[TestMethod]
+		public void TestLogic20()
+		{
+			TestExpr("false and 10 or 20", 20);
+			TestExpr("false and '10' or '20'", "20");
+		}
 
-    [TestMethod]
+		[TestMethod]
+		public void TestLogic21()
+		{
+			TestExpr("511 == '511'", false);
+			try
+			{
+				TestExpr("511 < '512'", true); // should: input:1: attempt to compare number with string
+				Assert.Fail();
+			}
+			catch
+			{
+			}
+		}
+
+		#endregion
+
+		#region -- Compare ----------------------------------------------------------------
+
+		[TestMethod]
     public void TestCompare01() { TestExpr("1 < 2", true); }
 
     [TestMethod]
@@ -1128,6 +1152,15 @@ namespace LuaDLR.Test
 				"else",
 				"  return 42;",
 				"end;"), 42);
+		}
+
+		[TestMethod]
+		public void TestCompare17()
+		{
+			TestCode(Lines(
+				"local a = '_test';",
+				"if a[0] == '_' then return 42 else return -1 end;"
+			), 42);
 		}
 
 		#endregion

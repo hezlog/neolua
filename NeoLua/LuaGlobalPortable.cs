@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
@@ -19,57 +20,7 @@ namespace Neo.IronLua
 		/// <summary></summary>
 		public const string VersionString = "NeoLua 5.3";
 
-		#region -- class LuaIndexPairEnumerator -------------------------------------------
-
-		private class LuaIndexPairEnumerator : System.Collections.IEnumerator
-		{
-			private LuaTable t;
-			private int[] indexes;
-			private int iCurrent = -1;
-
-			public LuaIndexPairEnumerator(LuaTable t)
-			{
-				this.t = t;
-
-				List<int> lst = new List<int>();
-				foreach (var c in t)
-				{
-					if (c.Key is int)
-						lst.Add((int)c.Key);
-				}
-				lst.Sort();
-				indexes = lst.ToArray();
-			} // ctor
-
-			public object Current
-			{
-				get
-				{
-					if (iCurrent >= 0 && iCurrent < indexes.Length)
-					{
-						int i = indexes[iCurrent];
-						return new KeyValuePair<object, object>(i, t[i]);
-					}
-					else
-						return null;
-				}
-			} // prop Current
-
-			public bool MoveNext()
-			{
-				iCurrent++;
-				return iCurrent < indexes.Length;
-			} // func MoveNext
-
-			public void Reset()
-			{
-				iCurrent = -1;
-			} // proc Reset
-		} // class LuaIndexPairEnumerator
-
-		#endregion
-
-		private Lua lua;
+		private readonly Lua lua;
 
 		#region -- Ctor/Dtor --------------------------------------------------------------
 
@@ -171,6 +122,32 @@ namespace Neo.IronLua
 
 		#region -- Basic Functions --------------------------------------------------------
 
+		#region -- class ArrayIndexEnumerator ---------------------------------------------
+
+		///////////////////////////////////////////////////////////////////////////////
+		/// <summary></summary>
+		private sealed class ArrayIndexEnumerator : IEnumerable<KeyValuePair<int, object>>
+		{
+			private readonly IEnumerable<object> array;
+
+			public ArrayIndexEnumerator(IEnumerable<object> array)
+			{
+				this.array = array;
+			} // ctor
+
+			public IEnumerator<KeyValuePair<int, object>> GetEnumerator()
+			{
+				var i = 1;
+				foreach (var c in array)
+					yield return new KeyValuePair<int, object>(i++, c);
+			} // func GetEnumerator
+
+			IEnumerator IEnumerable.GetEnumerator()
+				=> GetEnumerator();
+		} // class ArrayIndexEnumerator
+
+		#endregion
+
 		private static bool IsTrue(object value)
 		{
 			if (value == null)
@@ -188,30 +165,31 @@ namespace Neo.IronLua
 				}
 		} // func IsTrue
 
-		internal static KeyValuePair<string, object>[] CreateArguments(int iOffset, object[] args)
+		internal static KeyValuePair<string, object>[] CreateArguments(int offset, object[] args)
 		{
-			KeyValuePair<string, object>[] p = new KeyValuePair<string, object>[(args.Length - iOffset + 1) / 2]; // on 3 arguments we have 1 parameter
+			var p = new KeyValuePair<string, object>[(args.Length - offset + 1) / 2]; // on 3 arguments we have 1 parameter
 
 			// create parameter
-			for (int i = 0; i < p.Length; i++)
+			for (var i = 0; i < p.Length; i++)
 			{
-				int j = 2 + i * 2;
-				string sName = (string)args[j++];
-				object value = j < args.Length ? args[j] : null;
-				p[i] = new KeyValuePair<string, object>(sName, value);
+				var j = 2 + i * 2;
+				var name = (string)args[j++];
+				var value = j < args.Length ? args[j] : null;
+				p[i] = new KeyValuePair<string, object>(name, value);
 			}
+
 			return p;
 		} // func CreateArguments
 
 		/// <summary></summary>
 		/// <param name="value"></param>
-		/// <param name="sMessage"></param>
+		/// <param name="message"></param>
 		/// <returns></returns>
 		[LuaMember("assert")]
-		private static object LuaAssert(object value, string sMessage)
+		private static object LuaAssert(object value, string message)
 		{
 			if (!IsTrue(value))
-				LuaError(sMessage ?? "assertion failed!", 1);
+				LuaError(message ?? "assertion failed!", 1);
 			return value;
 		} // func LuaAssert
 
@@ -282,16 +260,16 @@ namespace Neo.IronLua
 		} // func LuaDoChunk
 
 		/// <summary></summary>
-		/// <param name="sMessage"></param>
+		/// <param name="message"></param>
 		/// <param name="level"></param>
 		[LuaMember("error")]
-		private static void LuaError(string sMessage, int level)
+		private static void LuaError(string message, int level)
 		{
 			if (level == 0)
 				level = 1;
 
 			// level ist der StackTrace
-			throw new LuaRuntimeException(sMessage, level, true);
+			throw new LuaRuntimeException(message, level, true);
 		} // proc LuaError
 
 		/// <summary></summary>
@@ -300,42 +278,83 @@ namespace Neo.IronLua
 		[LuaMember("getmetatable")]
 		private static LuaTable LuaGetMetaTable(object obj)
 		{
-			LuaTable t = obj as LuaTable;
+			var t = obj as LuaTable;
 			return t == null ? null : t.MetaTable;
 		} // func LuaGetMetaTable
 
-		private static LuaResult pairsEnum(object s, object current)
+		[LuaMember("rawmembers")]
+		private IEnumerable<KeyValuePair<string, object>> LuaRawMembers(LuaTable t)
 		{
-			System.Collections.IEnumerator e = (System.Collections.IEnumerator)s;
+			if (t == null)
+				throw new ArgumentNullException("#1");
+
+			return t.Members;
+		} // func LuaRawMembers
+
+		[LuaMember("rawarray")]
+		private IList<object> LuaRawArray(LuaTable t)
+		{
+			if (t == null)
+				throw new ArgumentNullException("#1");
+
+			return t.ArrayList;
+		} // func LuaRawArray
+
+		private static LuaResult pairsEnum<TKey>(object s, object current)
+		{
+			var e = (System.Collections.IEnumerator)s;
 
 			// return value
 			if (e.MoveNext())
 			{
-				KeyValuePair<object, object> k = (KeyValuePair<object, object>)e.Current;
+				var k = (KeyValuePair<TKey, object>)e.Current;
 				return new LuaResult(k.Key, k.Value);
 			}
 			else
+			{
+				var d = e as IDisposable;
+				d?.Dispose();
 				return LuaResult.Empty;
+			}
 		} // func pairsEnum
 
 		/// <summary></summary>
 		/// <param name="t"></param>
 		/// <returns></returns>
 		[LuaMember("ipairs")]
-		private static LuaResult LuaIPairs(LuaTable t)
+		private LuaResult LuaIPairs(LuaTable t)
 		{
-			var e = new LuaIndexPairEnumerator(t);
-			return new LuaResult(new Func<object, object, LuaResult>(pairsEnum), e, e);
+			if (t == null)
+				throw new ArgumentNullException("#1");
+
+			var e = new ArrayIndexEnumerator(t.ArrayList).GetEnumerator();
+			return new LuaResult(new Func<object, object, LuaResult>(pairsEnum<int>), e, e);
 		} // func ipairs
 
 		/// <summary></summary>
 		/// <param name="t"></param>
 		/// <returns></returns>
-		[LuaMember("pairs")]
-		private static LuaResult LuaPairs(LuaTable t)
+		[LuaMember("mpairs")]
+		private LuaResult LuaMPairs(LuaTable t)
 		{
+			if (t == null)
+				throw new ArgumentNullException("#1");
+
+			var e = t.Members.GetEnumerator();
+			return new LuaResult(new Func<object, object, LuaResult>(pairsEnum<string>), e, e);
+		} // func LuaPairs
+
+		/// <summary></summary>
+		/// <param name="t"></param>
+		/// <returns></returns>
+		[LuaMember("pairs")]
+		private LuaResult LuaPairs(LuaTable t)
+		{
+			if (t == null)
+				throw new ArgumentNullException("#1");
+
 			var e = ((System.Collections.IEnumerable)t).GetEnumerator();
-			return new LuaResult(new Func<object, object, LuaResult>(pairsEnum), e, e);
+			return new LuaResult(new Func<object, object, LuaResult>(pairsEnum<object>), e, e);
 		} // func LuaPairs
 
 		/// <summary></summary>
@@ -344,12 +363,7 @@ namespace Neo.IronLua
 		/// <returns></returns>
 		[LuaMember("next")]
 		private static object LuaNext(LuaTable t, object next)
-		{
-			if (t == null)
-				return null;
-			else
-				return t.NextKey(next);
-		} // func LuaNext
+			=> t == null ? null : t.NextKey(next);
 
 		/// <summary></summary>
 		/// <param name="target"></param>
@@ -357,15 +371,13 @@ namespace Neo.IronLua
 		/// <returns></returns>
 		[LuaMember("pcall")]
 		private LuaResult LuaPCall(object target, params object[] args)
-		{
-			return LuaXPCall(target, null, args);
-		} // func LuaPCall
+			=> LuaXPCall(target, null, args);
 
 		/// <summary></summary>
-		/// <param name="sText"></param>
-		protected virtual void OnPrint(string sText)
+		/// <param name="text"></param>
+		protected virtual void OnPrint(string text)
 		{
-			Debug.WriteLine(sText);
+			Debug.WriteLine(text);
 		} // proc OnPrint
 
 		/// <summary></summary>
@@ -410,9 +422,7 @@ namespace Neo.IronLua
 		/// <returns></returns>
 		[LuaMember("rawget")]
 		private static object LuaRawGet(LuaTable t, object index)
-		{
-			return t.GetValue(index, true);
-		} // func LuaRawGet
+			=> t.GetValue(index, true);
 
 		/// <summary></summary>
 		/// <param name="v"></param>
@@ -570,6 +580,10 @@ namespace Neo.IronLua
 			try
 			{
 				return new LuaResult(true, RtInvokeSite(target, args));
+			}
+			catch (TargetInvocationException e)
+			{
+				return new LuaResult(false, e.InnerException.Message, e.InnerException);
 			}
 			catch (Exception e)
 			{
